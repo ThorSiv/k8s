@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: zealcomm-logrotate
+  labels:
+    k8s-app: zealcomm-logrotate
+spec:
+  selector:
+    matchLabels:
+      name: zealcomm-logrotate
+  template:
+    metadata:
+      labels:
+        name: zealcomm-logrotate
+    spec:
+      containers:
+      - name: zealcomm-logrotate
+        image: tobbyqq/logrotate:v3
+        securityContext: 
+          privileged: true
+        resources:
+          limits:
+            memory: 1024Mi
+          requests:
+            cpu: 100m
+            memory: 200Mi
+        volumeMounts:
+        - name: logrotateconfig
+          mountPath: /etc/logrotate.d/logrotateme
+          subPath: logrotateme
+        #挂在宿主机目录
+        - name: hostlog
+          mountPath: /logs
+      volumes:
+      - name: logrotateconfig
+        configMap:
+          name: zealcomm-logrotate
+      # 添加宿主机目录
+      - name: hostlog
+        hostPath: 
+          path: 
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zealcomm-logrotate
+data:
+  logrotateme: |
+    /logs/*.log {
+        daily
+        missingok
+        maxsize 1024M
+        rotate 24
+        compress
+        delaycompress
+        dateformat -%Y%m%d_%H%M%S
+        notifempty
+        copytruncate
+    }
