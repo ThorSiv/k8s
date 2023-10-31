@@ -1,0 +1,74 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Pull code') {
+            steps {
+                // 从GitLab拉取代码
+                git branch: 'main', 
+                    credentialsId: 'gitlab_credentials', 
+                    url: 'https://gitlab.teyvatyu.com/zixin.liu/official-website.git'
+            }
+        }
+
+        // stage('Build') {
+        //     steps {
+        //         // 在docker的nodejs容器中将代码编译
+        //         script {
+        //             docker.image('node:14').inside {
+        //                 sh 'npm install'
+        //                 sh 'npm run build'
+        //             }
+        //         }
+        //     }
+        // }
+
+        stage('Deploy') {
+            steps {
+                // 将编译好的文件拷贝到远程机器的/work/目录
+                sshagent(['server-ssh']) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@139.224.135.192 "rm -rf /work/website/html/* "
+                        scp -r  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ./dist/* root@139.224.135.192:/work/website/html/
+                    """
+                }
+
+                // 重启远程机器的website docker容器
+                sshagent(['server-ssh']) {
+                    sh """
+                        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@139.224.135.192 "docker restart website"
+                    """
+                }
+            }
+        }
+        stage("Clean"){
+            steps {
+                deleteDir()
+            }
+        }
+    }
+        post {
+        always {
+            script {
+                def webhookUrl = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=65ccd511-fae8-434c-99ee-cc3dd869f64e'
+                def buildStatus = currentBuild.result
+                def markdownContent = """
+                ###  发布信息
+                > job名称:<font color=\"comment\">${env.JOB_NAME}</font>
+                > 构建状态:<font color=\"warning\">${buildStatus}</font>
+                > 构建序列号:<font color=\"comment\">${env.BUILD_NUMBER}</font>
+                """
+                // 构建请求的JSON体
+                def payload = [
+                    msgtype: 'markdown',
+                    markdown: [
+                        content: markdownContent
+                    ]
+                ]
+                
+                // 发送HTTP请求
+                httpRequest(url: webhookUrl, contentType: 'APPLICATION_JSON', httpMode: 'POST', requestBody: groovy.json.JsonOutput.toJson(payload))
+            }
+        }
+    }
+}

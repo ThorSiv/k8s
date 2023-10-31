@@ -1,0 +1,77 @@
+pipeline {
+    agent any
+    parameters {
+        string(name: 'TAG', defaultValue: '', description: 'The tag to checkout')
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                script {
+                    checkout([$class: 'GitSCM',branches: [[name: '*/main']],userRemoteConfigs: [[credentialsId: 'gitlab_credentials', url: 'https://gitlab.teyvatyu.com/wenxuan.kang/dl-proxy.git']]])
+                    if (params.TAG != '') {
+                        // 指定的 tag
+                        latestTag = params.TAG
+                        checkout([$class: 'GitSCM', branches: [[name: "refs/tags/${params.TAG}"]], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'gitlab_credentials', url: 'https://gitlab.teyvatyu.com/wenxuan.kang/dl-proxy.git']]])
+                    } else {
+                        // 最新的 tag
+                        latestTag = sh(returnStdout: true, script: 'git describe --tags `git rev-list --tags --max-count=1`').trim()
+                        checkout([$class: 'GitSCM', branches: [[name: "refs/tags/${latestTag}"]], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'gitlab_credentials', url: 'https://gitlab.teyvatyu.com/wenxuan.kang/dl-proxy.git']]])
+                    }
+                }
+            }
+        }
+        stage("shell"){
+                steps{
+                    sh '''
+                        git describe --tags
+                        rm -rf .git
+                    '''
+                }
+        
+        }        
+        stage('Deploy') {
+            steps {
+                // 文件拷贝到远程机器目录
+                sshagent(['server-ssh']) {
+                    sh """
+                        scp -r  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null * root@47.101.183.203:/work/proxy/dl-proxy/
+                        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@47.101.183.203 "systemctl restart bgrestore"
+                        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@47.101.183.203 "systemctl restart imageremix"
+                    """
+                }
+
+
+            }
+        }
+        stage("Clean"){
+            steps {
+                deleteDir()
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                def webhookUrl = 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=65ccd511-fae8-434c-99ee-cc3dd869f64e'
+                def buildStatus = currentBuild.result
+                def markdownContent = """
+                ###  发布信息
+                > job名称:<font color=\"comment\">${env.JOB_NAME}</font>
+                > 构建状态:<font color=\"warning\">${buildStatus}</font>
+                > 构建序列号:<font color=\"comment\">${env.BUILD_NUMBER}</font>
+                > 构建版本号:<font color=\"comment\">${latestTag}</font>
+                """
+                // 构建请求的JSON体
+                def payload = [
+                    msgtype: 'markdown',
+                    markdown: [
+                        content: markdownContent
+                    ]
+                ]
+                
+                // 发送HTTP请求
+                httpRequest(url: webhookUrl, contentType: 'APPLICATION_JSON', httpMode: 'POST', requestBody: groovy.json.JsonOutput.toJson(payload))
+            }
+        }
+    }
+}
